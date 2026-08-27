@@ -23,6 +23,7 @@ from .client import (
     to_pandas,
 )
 from .exceptions import (
+    EmptyCategoryData,
     TefasAPIError,
     TefasError,
     TefasHTTPError,
@@ -74,5 +75,6 @@ __all__ = [
     "TefasHTTPError",
     "TefasRateLimitError",
     "TefasInvalidParameter",
+    "EmptyCategoryData",
     "__version__",
 ]

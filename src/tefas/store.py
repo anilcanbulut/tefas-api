@@ -18,6 +18,7 @@ import os
 import sqlite3
 from typing import Iterable, List, Optional, Sequence
 
+from .exceptions import EmptyCategoryData
 from .fields import BREAKDOWN_FIELDS, INFO_FIELDS, RETURN_FIELDS
 
 #: Arbitrary but fixed anchor for window alignment. Never change it: doing so
@@ -300,6 +301,15 @@ class Store:
         ``category`` matches the most recent stored returns snapshot and is a
         substring match, so "Hisse Senedi" catches the umbrella category.
         """
+        if category and not self.conn.execute(
+            "SELECT 1 FROM returns LIMIT 1"
+        ).fetchone():
+            raise EmptyCategoryData(
+                "Cannot filter by category: no returns snapshot has been stored, "
+                "and category names come from it. Run `tefas sync --returns` "
+                "(or refresh_returns()) first."
+            )
+
         sql = """
             WITH bounds AS (
               SELECT code, MIN(date) AS d0, MAX(date) AS d1

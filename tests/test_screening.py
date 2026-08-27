@@ -180,3 +180,20 @@ def test_categories_are_counted(store):
             fetched_on="2026-08-27",
         )
     assert store.categories()[0]["funds"] == 2
+
+
+def test_category_filter_without_a_snapshot_fails_loudly(store):
+    """Silently matching nothing would read as "no funds qualify" rather than
+    "you have not synced categories yet"."""
+    from tefas.exceptions import EmptyCategoryData
+
+    store.upsert_prices(
+        [
+            {"code": "AAA", "date": "2026-08-01", "price": 100.0},
+            {"code": "AAA", "date": "2026-08-31", "price": 110.0},
+        ],
+        kind="YAT",
+    )
+    assert store.performance("2026-08-01", "2026-08-31")  # unfiltered still works
+    with pytest.raises(EmptyCategoryData, match="sync --returns"):
+        store.performance("2026-08-01", "2026-08-31", category="Hisse Senedi")

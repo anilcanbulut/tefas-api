@@ -32,3 +32,12 @@ class TefasAPIError(TefasError):
 
 class TefasInvalidParameter(TefasError, ValueError):
     """A argument was rejected before any request was made."""
+
+
+class EmptyCategoryData(TefasError):
+    """A category filter was used before any returns snapshot was stored.
+
+    Category names live in the returns snapshot, so filtering by one against a
+    cache that has never seen it would quietly match nothing -- which reads as
+    "no funds qualify" rather than "you have not synced categories yet".
+    """
