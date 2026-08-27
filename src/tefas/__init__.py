@@ -39,6 +39,7 @@ from .fields import (
     RETURN_FIELDS,
     UNMAPPED_BREAKDOWN_KEYS,
 )
+from . import canary
 from .ingest import backfill, estimate_requests, refresh_returns, sync
 from .ratelimit import OBSERVED_LIMIT, SlidingWindowLimiter
 from .store import Store
@@ -48,6 +49,7 @@ __version__ = "0.1.0"
 __all__ = [
     "Tefas",
     "Store",
+    "canary",
     "to_pandas",
     "parse_date",
     "date_windows",

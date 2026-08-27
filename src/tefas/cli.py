@@ -16,6 +16,7 @@ import logging
 import sys
 
 from . import __version__
+from . import canary as _canary
 from .client import Tefas, parse_date
 from .exceptions import TefasError
 from .fields import KIND_LABELS, KINDS
@@ -223,6 +224,34 @@ def cmd_categories(args):
     return 0
 
 
+def cmd_groups(args):
+    end = _dt.date.today() if not args.to else parse_date(args.to)
+    start = parse_date(args.since) if args.since else end - _dt.timedelta(days=args.days)
+
+    with Store(args.db) as store:
+        rows = store.category_performance(
+            start.isoformat(),
+            end.isoformat(),
+            kind=None if args.kind == "ALL" else args.kind,
+            min_funds=args.min_funds,
+        )
+    print("Category performance, {} .. {}".format(start, end))
+    _print_table(
+        rows,
+        ["category", "funds", "avg_return", "median_return", "worst", "best",
+         "spread", "positive_share"],
+    )
+    return 0
+
+
+def cmd_canary(args):
+    with _client(args) as api:
+        results = _canary.run(api, code=args.code, kind=args.kind)
+    print()
+    print(_canary.report(results))
+    return _canary.exit_code(results)
+
+
 def cmd_stats(args):
     with Store(args.db) as store:
         info = store.stats()
@@ -328,6 +357,23 @@ def build_parser():
         "categories", help="categories in the cached returns snapshot"
     )
     categories_parser.set_defaults(func=cmd_categories)
+
+    groups_parser = subparsers.add_parser(
+        "groups", help="how each fund category performed over a window"
+    )
+    groups_parser.add_argument("--days", type=int, default=90)
+    groups_parser.add_argument("--since", help="explicit start date")
+    groups_parser.add_argument("--to", help="explicit end date")
+    groups_parser.add_argument("--min-funds", type=int, default=1,
+                               dest="min_funds", help="ignore thin categories")
+    groups_parser.set_defaults(func=cmd_groups)
+
+    canary_parser = subparsers.add_parser(
+        "canary", help="check the API still works and has not changed shape"
+    )
+    canary_parser.add_argument("--code", default="AFA",
+                               help="fund used for the profile check")
+    canary_parser.set_defaults(func=cmd_canary)
 
     stats_parser = subparsers.add_parser("stats", help="what the cache holds")
     stats_parser.set_defaults(func=cmd_stats)

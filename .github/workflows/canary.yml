@@ -1,0 +1,64 @@
+name: canary
+
+# These endpoints are undocumented and unversioned. The expensive failure is
+# not an outage but a quiet change -- a renamed column, a field that starts
+# arriving null -- which leaves code running and wrong. This runs the shape
+# checks daily so that arrives as a red build rather than as a support ticket.
+
+on:
+  schedule:
+    - cron: "30 17 * * *" # ~20:30 Istanbul, after the daily publish
+  workflow_dispatch:
+
+concurrency:
+  group: canary
+  cancel-in-progress: false
+
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install
+        run: pip install -e .
+
+      - name: Check the API has not changed shape
+        id: canary
+        # Exit 1 means new fields appeared: worth mapping, not worth failing
+        # the build. Exit 2 means something callers depend on is gone.
+        run: |
+          set +e
+          tefas --quiet canary | tee canary.txt
+          code=${PIPESTATUS[0]}
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          if [ "$code" -ge 2 ]; then exit 1; fi
+          exit 0
+
+      - name: Note new fields
+        if: steps.canary.outputs.code == '1'
+        run: |
+          echo "### TEFAS added unrecognised fields" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat canary.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Report a break
+        if: failure()
+        run: |
+          echo "### TEFAS API broke" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat canary.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: canary-report
+          path: canary.txt
+          retention-days: 30

@@ -365,6 +365,64 @@ class Store:
             sql += " LIMIT {}".format(int(limit))
         return self.query(sql, params)
 
+    def category_performance(self, start: str, end: str, kind: Optional[str] = None,
+                             min_funds: int = 1) -> List[dict]:
+        """How each fund category performed over a window.
+
+        Built on top of :meth:`performance`, deliberately, so the group view and
+        the per-fund view can never disagree about what a return is or which
+        funds count.
+
+        Dispersion is usually the more useful half of the answer: money market
+        funds land in a fraction of a point of each other while serbest funds
+        span tens of points, and an average alone hides that. So ``spread`` and
+        ``positive_share`` are reported alongside the mean, and the median is
+        given because a single extreme fund can drag a category's mean well
+        away from its typical member.
+        """
+        rows = self.performance(start, end, kind=kind)
+
+        grouped = {}
+        for row in rows:
+            category = row.get("category")
+            if not category:
+                continue
+            grouped.setdefault(category, []).append(row["return_pct"])
+
+        if not grouped:
+            raise EmptyCategoryData(
+                "No categories are stored, so returns cannot be grouped. Run "
+                "`tefas sync --returns` (or refresh_returns()) first."
+            )
+
+        summary = []
+        for category, values in grouped.items():
+            if len(values) < min_funds:
+                continue
+            values.sort()
+            count = len(values)
+            middle = count // 2
+            median = (
+                values[middle]
+                if count % 2
+                else (values[middle - 1] + values[middle]) / 2.0
+            )
+            summary.append(
+                {
+                    "category": category,
+                    "funds": count,
+                    "avg_return": sum(values) / count,
+                    "median_return": median,
+                    "worst": values[0],
+                    "best": values[-1],
+                    "spread": values[-1] - values[0],
+                    "positive_share": sum(1 for v in values if v > 0) * 100.0 / count,
+                }
+            )
+
+        summary.sort(key=lambda item: item["avg_return"], reverse=True)
+        return summary
+
     def categories(self) -> List[dict]:
         """Categories present in the most recent stored returns snapshot."""
         return self.query(

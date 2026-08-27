@@ -141,7 +141,9 @@ tefas show AFA --days 30          # recent prices for one fund
 tefas profile AFA                 # summary card: rank in category, market share
 tefas top --by return_1y -n 20    # league table from the returns endpoint
 tefas screen --category "Hisse Senedi" --min 5 --days 30
+tefas groups --days 90            # how each category performed
 tefas categories                  # categories in the cached snapshot
+tefas canary                      # check the API has not changed shape
 tefas stats                       # what the cache holds
 tefas export prices -o out.csv    # dump a table
 tefas kinds                       # list fund types
@@ -165,6 +167,46 @@ tefas screen --since 2026-01-01 --to 2026-06-30 --max 0
 Each fund is measured between its own first and last quote inside the window, so one that started
 trading midway through is reported honestly instead of being compared against a price it never had.
 Funds with a single quote are excluded rather than reported as 0%.
+
+### Group performance
+
+`tefas groups` answers "which kinds of fund are doing well lately", and reports dispersion next to
+the average — because two categories can share a mean and be nothing alike:
+
+```
+category                         funds  avg_return  median_return   worst    best  spread  positive_share
+Kıymetli Madenler Şemsiye Fonu      27        6.31           6.35    5.13    6.86    1.72          100
+Hisse Senedi Şemsiye Fonu          186        2.81           3.00   -6.12   10.69   16.81         92.5
+Serbest Şemsiye Fonu               383        1.64           1.08  -16.20   42.00   58.20         91.1
+Para Piyasası Şemsiye Fonu          50        1.11           1.08    1.02    1.36    0.34          100
+```
+
+Money market funds land within a third of a point of each other; serbest funds span 58 points. The
+median is there because one extreme fund can drag a category's mean far from its typical member.
+
+Available as `Store.category_performance(...)`, built on `performance()` so the group and per-fund
+views cannot disagree.
+
+## Monitoring
+
+These endpoints are undocumented and unversioned. The expensive failure is not an outage — that is
+obvious — but a *quiet* change: a renamed column, a field that starts arriving null. Code keeps
+running and starts being wrong.
+
+`tefas canary` checks shape, not just reachability: every mapped field still present, no
+unrecognised field appeared, row counts still sane (a collapse from 2,000 funds to 5 is a
+successful response and a broken one). Four requests.
+
+```
+OK    prices     8150 rows
+OK    breakdown  8117 rows
+OK    returns    1059 rows
+OK    profile    1 rows
+```
+
+Exit codes are meant for cron and CI: `0` all clear, `1` new fields appeared (worth mapping, not
+worth paging anyone), `2` something callers depend on is gone. A daily GitHub Actions workflow is
+included at `.github/workflows/canary.yml`.
 
 
 ## Request budget
@@ -246,12 +288,27 @@ The HTML pages on tefas.gov.tr sit behind an F5 bot-defence challenge; the `/api
 do not. That is why this package calls the API rather than scraping pages, and why it needs no
 browser automation.
 
-## A caveat worth designing around
+## Deploying alongside an app
 
-These endpoints are undocumented and unversioned. TEFAS changed them once in 2026 and can do so
-again without notice. All of that knowledge is confined to `client.py`, so a break has one place to
-be fixed. Consider running the test suite on a schedule as a canary, so you learn about a change
-from a monitor rather than from a user.
+Run ingestion in **one** process and let the app read only from SQLite:
+
+```
+  cron / worker (ONE process)          your app (many processes)
+  tefas sync --returns          ->     SQLite  ->  read-only queries
+       ~3 requests/day                             no rate limit, no network
+```
+
+This matters: the rate limiter is per-process. Four web workers each holding a `Tefas()` do not
+know about each other, and collectively blow through five requests a minute. Keeping the network on
+one scheduled writer also means the read path cannot be throttled, cannot be slow, and cannot break
+when TEFAS changes.
+
+WAL is enabled, so one writer and many concurrent readers is fine. Nothing here is SQLite-specific
+beyond the connection if you later move to Postgres.
+
+Sizing: nine trading days of prices and allocations is 10.5 MB, so five years is roughly 1.5 GB. The
+58-column allocation table dominates that — `tefas backfill --datasets prices` is much smaller if
+you do not need daily allocation history.
 
 ## Licence
 
