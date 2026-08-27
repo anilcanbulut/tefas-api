@@ -52,6 +52,28 @@ tefas --db <abs-path> backfill --years 5  # ~130 requests, ~33 min, resumable
 `backfill` records completed windows, so interrupting and re-running resumes. Only the window
 containing today is re-fetched.
 
+## Configuration
+
+Tunable from both surfaces, explicitly — no config file, nothing read from the environment.
+
+```python
+Tefas(rate=2, window=60, max_retries=5, timeout=90,
+      backoff_base=60, backoff_cap=300, backoff_jitter=0.25)
+Store(path=r"C:\Users\anilc\tefas\tefas.db")
+```
+
+```bash
+tefas --rate 2 --window 60 --max-retries 5 --timeout 90 \
+      --backoff-base 60 --backoff-cap 300 --db <abs-path> sync
+```
+
+Every `Tefas(...)` argument except `session` and `progress` has a matching CLI flag, enforced by a
+parity test in `tests/test_config.py`. **If you add a constructor argument, add the flag too** or
+that test fails.
+
+Lower `--rate` if something else on this machine is also calling TEFAS; the 5/min limit is per-IP
+and shared.
+
 ## Layout
 
 | File | Holds |

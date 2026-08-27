@@ -21,7 +21,13 @@ from .client import Tefas, parse_date
 from .exceptions import TefasError
 from .fields import KIND_LABELS, KINDS
 from .ingest import DATASETS, backfill, estimate_requests, refresh_returns, sync
-from .ratelimit import DEFAULT_RATE
+from .ratelimit import (
+    DEFAULT_BACKOFF_BASE,
+    DEFAULT_BACKOFF_CAP,
+    DEFAULT_BACKOFF_JITTER,
+    DEFAULT_RATE,
+    DEFAULT_WINDOW,
+)
 from .store import Store, aligned_windows
 
 
@@ -36,7 +42,21 @@ def _progress(done, total, label):
 
 
 def _client(args):
-    return Tefas(rate=args.rate, progress=None if args.quiet else _progress)
+    """Build a client from the global flags.
+
+    Kept in one place so every subcommand is tuned the same way, and so the
+    flags stay a one-to-one mirror of the ``Tefas(...)`` arguments.
+    """
+    return Tefas(
+        rate=args.rate,
+        window=args.window,
+        max_retries=args.max_retries,
+        timeout=args.timeout,
+        backoff_base=args.backoff_base,
+        backoff_cap=args.backoff_cap,
+        backoff_jitter=args.backoff_jitter,
+        progress=None if args.quiet else _progress,
+    )
 
 
 def _kinds(args):
@@ -290,15 +310,47 @@ def build_parser():
     )
     parser.add_argument("--version", action="version", version=__version__)
     parser.add_argument("--db", default="tefas.db", help="SQLite cache path")
-    parser.add_argument(
-        "--rate",
-        type=int,
-        default=DEFAULT_RATE,
-        help="requests per minute (TEFAS refuses at 6; default {})".format(DEFAULT_RATE),
-    )
     parser.add_argument("--kind", default="YAT", choices=list(KINDS) + ["ALL"])
     parser.add_argument("-q", "--quiet", action="store_true", help="no progress bar")
     parser.add_argument("-v", "--verbose", action="store_true", help="debug logging")
+
+    # One flag per Tefas(...) argument, so the same tuning is reachable from
+    # the shell as from Python.
+    throttle = parser.add_argument_group(
+        "throttling",
+        "TEFAS allows 5 requests/minute per IP and sends no Retry-After.",
+    )
+    throttle.add_argument(
+        "--rate", type=int, default=DEFAULT_RATE,
+        help="requests per window (TEFAS refuses at 6; default {})".format(DEFAULT_RATE),
+    )
+    throttle.add_argument(
+        "--window", type=float, default=DEFAULT_WINDOW,
+        help="rate-limit window in seconds (default {:.0f})".format(DEFAULT_WINDOW),
+    )
+    throttle.add_argument(
+        "--max-retries", type=int, default=5, dest="max_retries",
+        help="retries after a 429 (default 5)",
+    )
+    throttle.add_argument(
+        "--timeout", type=int, default=90,
+        help="per-request socket timeout in seconds (default 90)",
+    )
+    throttle.add_argument(
+        "--backoff-base", type=float, default=DEFAULT_BACKOFF_BASE,
+        dest="backoff_base",
+        help="first backoff after a 429, seconds (default {:.0f})".format(
+            DEFAULT_BACKOFF_BASE),
+    )
+    throttle.add_argument(
+        "--backoff-cap", type=float, default=DEFAULT_BACKOFF_CAP, dest="backoff_cap",
+        help="maximum backoff, seconds (default {:.0f})".format(DEFAULT_BACKOFF_CAP),
+    )
+    throttle.add_argument(
+        "--backoff-jitter", type=float, default=DEFAULT_BACKOFF_JITTER,
+        dest="backoff_jitter",
+        help="backoff randomisation, 0-1 (default {})".format(DEFAULT_BACKOFF_JITTER),
+    )
 
     subparsers = parser.add_subparsers(dest="command")
 

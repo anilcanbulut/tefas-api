@@ -187,6 +187,38 @@ median is there because one extreme fund can drag a category's mean far from its
 Available as `Store.category_performance(...)`, built on `performance()` so the group and per-fund
 views cannot disagree.
 
+## Configuration
+
+Everything tunable is reachable from **both** surfaces: keyword arguments in Python, flags on the
+command line. There is no config file and nothing is read from the environment — configuration is
+explicit at the call site.
+
+| Setting | Python | CLI | Default |
+|---|---|---|---|
+| Requests per window | `Tefas(rate=)` | `--rate` | 4 |
+| Rate-limit window (s) | `Tefas(window=)` | `--window` | 60 |
+| Retries after a 429 | `Tefas(max_retries=)` | `--max-retries` | 5 |
+| Socket timeout (s) | `Tefas(timeout=)` | `--timeout` | 90 |
+| First backoff (s) | `Tefas(backoff_base=)` | `--backoff-base` | 60 |
+| Maximum backoff (s) | `Tefas(backoff_cap=)` | `--backoff-cap` | 300 |
+| Backoff jitter | `Tefas(backoff_jitter=)` | `--backoff-jitter` | 0.25 |
+| Cache path | `Store(path=)` | `--db` | `tefas.db` |
+| Fund type | `kind=` | `--kind` | `YAT` |
+| Datasets | `datasets=` | `--datasets` | prices + breakdown |
+| Sync overlap (days) | `sync(lookback_days=)` | `--lookback` | 10 |
+
+```python
+api = Tefas(rate=2, timeout=30, backoff_base=90)   # gentler than default
+```
+
+```bash
+tefas --rate 2 --timeout 30 --backoff-base 90 --db /data/tefas.db sync
+```
+
+`Tefas(session=)` and `Tefas(progress=)` take objects a shell cannot express, so they are
+Python-only. Every other constructor argument has a matching flag, and a test asserts that by
+introspection — so a knob added without a flag fails the build rather than being noticed later.
+
 ## Monitoring
 
 These endpoints are undocumented and unversioned. The expensive failure is not an outage — that is

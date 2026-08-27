@@ -21,6 +21,12 @@ DEFAULT_RATE = 4
 
 DEFAULT_WINDOW = 60.0
 
+#: Backoff defaults. The base is a full window on purpose: a 429 means the
+#: window is full, so retrying sooner cannot succeed.
+DEFAULT_BACKOFF_BASE = 60.0
+DEFAULT_BACKOFF_CAP = 300.0
+DEFAULT_BACKOFF_JITTER = 0.25
+
 
 class SlidingWindowLimiter:
     """Allow at most ``rate`` acquisitions per ``window`` seconds.
@@ -73,7 +79,8 @@ class SlidingWindowLimiter:
             self._hits = deque([now] * self.rate)
 
 
-def backoff_delay(attempt, base=60.0, cap=300.0, jitter=0.25, rng=random.random):
+def backoff_delay(attempt, base=DEFAULT_BACKOFF_BASE, cap=DEFAULT_BACKOFF_CAP,
+                  jitter=DEFAULT_BACKOFF_JITTER, rng=random.random):
     """Seconds to wait before retry number ``attempt`` (0-indexed).
 
     Seeded at the length of the rate-limit window rather than the usual one

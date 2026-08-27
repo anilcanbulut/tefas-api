@@ -35,7 +35,15 @@ from .fields import (
     RETURN_FIELDS,
     rename,
 )
-from .ratelimit import DEFAULT_RATE, DEFAULT_WINDOW, SlidingWindowLimiter, backoff_delay
+from .ratelimit import (
+    DEFAULT_BACKOFF_BASE,
+    DEFAULT_BACKOFF_CAP,
+    DEFAULT_BACKOFF_JITTER,
+    DEFAULT_RATE,
+    DEFAULT_WINDOW,
+    SlidingWindowLimiter,
+    backoff_delay,
+)
 
 log = logging.getLogger("tefas")
 
@@ -134,6 +142,12 @@ class Tefas:
     progress:
         Optional ``callable(done, total, label)`` invoked once per HTTP request,
         for CLI progress reporting.
+    backoff_base, backoff_cap, backoff_jitter:
+        Retry timing after a 429. The base is a full rate-limit window by
+        default, because retrying before the window rolls cannot succeed.
+
+    Every one of these has a matching flag on the ``tefas`` command, so the
+    same tuning is available whether this is driven from Python or the shell.
     """
 
     def __init__(
@@ -144,10 +158,16 @@ class Tefas:
         timeout: int = 90,
         session: Optional[requests.Session] = None,
         progress=None,
+        backoff_base: float = DEFAULT_BACKOFF_BASE,
+        backoff_cap: float = DEFAULT_BACKOFF_CAP,
+        backoff_jitter: float = DEFAULT_BACKOFF_JITTER,
     ):
         self.timeout = timeout
         self.max_retries = max_retries
         self.progress = progress
+        self.backoff_base = backoff_base
+        self.backoff_cap = backoff_cap
+        self.backoff_jitter = backoff_jitter
         self.limiter = SlidingWindowLimiter(rate=rate, window=window)
         self.session = session or requests.Session()
         self.session.headers.update(DEFAULT_HEADERS)
@@ -221,7 +241,14 @@ class Tefas:
         )
 
     def _sleep_for_retry(self, attempt: int):
-        time.sleep(backoff_delay(attempt))
+        time.sleep(
+            backoff_delay(
+                attempt,
+                base=self.backoff_base,
+                cap=self.backoff_cap,
+                jitter=self.backoff_jitter,
+            )
+        )
 
     def _report(self, done, total, label):
         if self.progress:
