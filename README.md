@@ -76,6 +76,11 @@ api.snapshot("2026-08-26")
 
 # Every fund code
 api.fund_codes()
+
+# Summary card for one fund: rank in category, market share
+api.profile("AFA")
+# {'code': 'AFA', 'category': 'Hisse Senedi Fonu', 'category_rank': 34,
+#  'category_fund_count': 199, 'market_share': 2.05, ...}
 ```
 
 All methods take `kind=` — `"YAT"` (default), `"EMK"`, `"BYF"`, `"GYF"`, `"GSYF"`, a list of them,
@@ -109,20 +114,58 @@ with Tefas() as api:
 starting over. `sync` re-fetches a short overlap by default because TEFAS occasionally revises a
 published price and late-reporting funds appear after the fact.
 
+### Screen the cache
+
+Once data is local, filtering costs nothing and is not limited to TEFAS's fixed periods:
+
+```python
+# equity funds that gained more than 5% over an arbitrary window
+store.performance(
+    "2026-07-27", "2026-08-27",
+    category="Hisse Senedi",
+    min_return=5,
+)
+```
+
+Returns are computed from stored prices between each fund's own first and last quote in the window.
+For anything more specific, query the SQLite file directly — `prices`, `breakdown` and `returns`
+are ordinary tables.
+
 ## CLI
 
 ```bash
-tefas sync                        # bring the cache up to date
+tefas sync --returns              # bring the cache up to date
 tefas backfill --years 5          # one-off history load, resumable
 tefas funds                       # list funds
 tefas show AFA --days 30          # recent prices for one fund
-tefas top --by return_1y -n 20    # league table
+tefas profile AFA                 # summary card: rank in category, market share
+tefas top --by return_1y -n 20    # league table from the returns endpoint
+tefas screen --category "Hisse Senedi" --min 5 --days 30
+tefas categories                  # categories in the cached snapshot
 tefas stats                       # what the cache holds
 tefas export prices -o out.csv    # dump a table
 tefas kinds                       # list fund types
 ```
 
 Global flags: `--db`, `--kind`, `--rate`, `--quiet`, `--verbose`.
+
+### Screening
+
+`screen` runs entirely against the cache, so it costs **no requests** and takes any window you
+like rather than TEFAS's fixed 1m/3m/6m/1y periods:
+
+```bash
+# equity funds up more than 5% in the last month
+tefas screen --category "Hisse Senedi" --min 5 --days 30
+
+# anything that lost ground over a specific window
+tefas screen --since 2026-01-01 --to 2026-06-30 --max 0
+```
+
+Each fund is measured between its own first and last quote inside the window, so one that started
+trading midway through is reported honestly instead of being compared against a price it never had.
+Funds with a single quote are excluded rather than reported as 0%.
+
 
 ## Request budget
 
@@ -178,6 +221,30 @@ adds in future is passed through the same way instead of being dropped.
 | `POST /api/funds/dagilimSiraliGetirT` | Portfolio allocation, ~58 columns |
 | `POST /api/funds/fonGetiriBazliBilgiGetir` | Trailing returns, risk score, category |
 | `POST /api/funds/fonFiyatBilgiGetir` | Single-fund history by fixed look-back period |
+| `POST /api/funds/fonBilgiGetir` | Summary card: rank in category, market share |
+
+## What you can and cannot get
+
+Available, and covered here:
+
+- **Full price history** for any fund — NAV, fund size, share count and investor count, over any
+  date range, going back years.
+- **Portfolio allocation** — ~58 instrument classes per fund per day.
+- **Trailing returns** (1m/3m/6m/YTD/1y/3y/5y), the official **risk score** (1–7), and category.
+- **Category standing** — rank within category, number of funds in that category, market share.
+- **Screening** by category, fund type, and return over any window.
+
+Not published by these endpoints, so not available here:
+
+- Management fee / total expense ratio, ISIN, minimum investment, settlement (valör) days.
+- Prospectus and strategy text, and individual portfolio holdings — allocation is given by
+  instrument *class*, not by security. This detail lives on KAP, not TEFAS.
+- Founder / portfolio company as a field, though it is the leading word of every fund title
+  (`AK PORTFÖY …`, `ATA PORTFÖY …`) and can be derived from there.
+
+The HTML pages on tefas.gov.tr sit behind an F5 bot-defence challenge; the `/api/funds/` endpoints
+do not. That is why this package calls the API rather than scraping pages, and why it needs no
+browser automation.
 
 ## A caveat worth designing around
 

@@ -284,6 +284,85 @@ class Store:
         out["path"] = os.path.abspath(self.path)
         return out
 
+    def performance(self, start: str, end: str, min_return: Optional[float] = None,
+                    max_return: Optional[float] = None, category: Optional[str] = None,
+                    kind: Optional[str] = None, limit: Optional[int] = None) -> List[dict]:
+        """Screen funds by actual return between two dates, computed from prices.
+
+        This is the query the returns endpoint cannot answer: it uses whatever
+        window you ask for rather than TEFAS's fixed 1m/3m/6m/1y periods, and it
+        costs no requests because it reads cached prices.
+
+        Each fund is measured between its own first and last quote inside the
+        window, so a fund that started trading mid-window is still reported
+        honestly rather than being compared against a price it never had.
+
+        ``category`` matches the most recent stored returns snapshot and is a
+        substring match, so "Hisse Senedi" catches the umbrella category.
+        """
+        sql = """
+            WITH bounds AS (
+              SELECT code, MIN(date) AS d0, MAX(date) AS d1
+              FROM prices
+              WHERE date BETWEEN ? AND ?
+              GROUP BY code
+            ),
+            latest_returns AS (
+              SELECT r.code, r.category, r.risk_value
+              FROM returns r
+              JOIN (
+                SELECT code, MAX(fetched_on) AS fetched_on
+                FROM returns GROUP BY code
+              ) newest
+                ON newest.code = r.code AND newest.fetched_on = r.fetched_on
+            )
+            SELECT
+              b.code,
+              p1.title,
+              b.d0 AS start_date,
+              b.d1 AS end_date,
+              p0.price AS start_price,
+              p1.price AS end_price,
+              (p1.price / p0.price - 1.0) * 100.0 AS return_pct,
+              p1.market_cap,
+              p1.number_of_investors,
+              p1.kind,
+              lr.category,
+              lr.risk_value
+            FROM bounds b
+            JOIN prices p0 ON p0.code = b.code AND p0.date = b.d0
+            JOIN prices p1 ON p1.code = b.code AND p1.date = b.d1
+            LEFT JOIN latest_returns lr ON lr.code = b.code
+            WHERE p0.price > 0 AND b.d0 <> b.d1
+        """
+        params: List = [start, end]
+
+        if min_return is not None:
+            sql += " AND (p1.price / p0.price - 1.0) * 100.0 >= ?"
+            params.append(min_return)
+        if max_return is not None:
+            sql += " AND (p1.price / p0.price - 1.0) * 100.0 <= ?"
+            params.append(max_return)
+        if category:
+            sql += " AND lr.category LIKE ?"
+            params.append("%{}%".format(category))
+        if kind:
+            sql += " AND p1.kind = ?"
+            params.append(kind)
+
+        sql += " ORDER BY return_pct DESC"
+        if limit:
+            sql += " LIMIT {}".format(int(limit))
+        return self.query(sql, params)
+
+    def categories(self) -> List[dict]:
+        """Categories present in the most recent stored returns snapshot."""
+        return self.query(
+            "SELECT category, COUNT(*) AS funds FROM returns "
+            "WHERE fetched_on = (SELECT MAX(fetched_on) FROM returns) "
+            "AND category IS NOT NULL GROUP BY category ORDER BY funds DESC"
+        )
+
     def close(self):
         self.conn.close()
 

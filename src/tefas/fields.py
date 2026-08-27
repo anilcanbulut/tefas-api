@@ -114,6 +114,26 @@ UNMAPPED_BREAKDOWN_KEYS = frozenset(
     }
 )
 
+# --- /api/funds/fonBilgiGetir -------------------------------------------------
+#
+# Per-fund summary card behind the fund detail page. Carries three things no
+# other endpoint exposes: where the fund ranks inside its category, how many
+# funds it is ranked against, and its share of the whole market.
+
+PROFILE_FIELDS = {
+    "fonKodu": "code",
+    "fonUnvan": "title",
+    "sonFiyat": "last_price",
+    "gunlukGetiri": "daily_return",
+    "payAdet": "number_of_shares",
+    "portBuyukluk": "market_cap",
+    "fonKategori": "category",
+    "kategoriDerece": "category_rank",
+    "kategoriFonSay": "category_fund_count",
+    "yatirimciSayi": "number_of_investors",
+    "pazarPayi": "market_share",
+}
+
 #: Fund types accepted by ``fonTipi``.
 KINDS = ("YAT", "EMK", "BYF", "GYF", "GSYF")
 

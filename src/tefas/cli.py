@@ -169,6 +169,60 @@ def cmd_top(args):
     return 0
 
 
+def cmd_profile(args):
+    with _client(args) as api:
+        row = api.profile(args.code)
+    if not row:
+        print("TEFAS does not know fund code {}.".format(args.code.upper()))
+        return 1
+    print()
+    for key, value in row.items():
+        print("  {:<22} {}".format(key, _fmt(value)))
+    rank, total = row.get("category_rank"), row.get("category_fund_count")
+    if rank and total:
+        print()
+        print("  Ranked {} of {} in {}.".format(rank, total, row.get("category")))
+    return 0
+
+
+def cmd_screen(args):
+    end = _dt.date.today() if not args.to else parse_date(args.to)
+    start = parse_date(args.since) if args.since else end - _dt.timedelta(days=args.days)
+
+    with Store(args.db) as store:
+        rows = store.performance(
+            start.isoformat(),
+            end.isoformat(),
+            min_return=args.min,
+            max_return=args.max,
+            category=args.category,
+            kind=None if args.kind == "ALL" else args.kind,
+            limit=args.limit,
+        )
+    if not rows:
+        print(
+            "No matches in the cache for {} .. {}. Run `tefas sync` first, or "
+            "widen the filters.".format(start, end)
+        )
+        return 1
+    print("{} funds, {} .. {}".format(len(rows), start, end))
+    _print_table(
+        rows, ["code", "return_pct", "start_price", "end_price", "risk_value",
+               "category", "title"]
+    )
+    return 0
+
+
+def cmd_categories(args):
+    with Store(args.db) as store:
+        rows = store.categories()
+    if not rows:
+        print("No categories cached. Run `tefas sync --returns` first.")
+        return 1
+    _print_table(rows, ["category", "funds"])
+    return 0
+
+
 def cmd_stats(args):
     with Store(args.db) as store:
         info = store.stats()
@@ -252,6 +306,28 @@ def build_parser():
     top_parser.add_argument("-n", type=int, default=20)
     top_parser.add_argument("--ascending", action="store_true")
     top_parser.set_defaults(func=cmd_top)
+
+    profile_parser = subparsers.add_parser("profile", help="summary card for one fund")
+    profile_parser.add_argument("code")
+    profile_parser.set_defaults(func=cmd_profile)
+
+    screen_parser = subparsers.add_parser(
+        "screen", help="filter cached funds by return over any window"
+    )
+    screen_parser.add_argument("--days", type=int, default=30,
+                               help="window length ending today (default 30)")
+    screen_parser.add_argument("--since", help="explicit start date")
+    screen_parser.add_argument("--to", help="explicit end date")
+    screen_parser.add_argument("--min", type=float, help="minimum return %%")
+    screen_parser.add_argument("--max", type=float, help="maximum return %%")
+    screen_parser.add_argument("--category", help='substring, e.g. "Hisse Senedi"')
+    screen_parser.add_argument("--limit", type=int, default=30)
+    screen_parser.set_defaults(func=cmd_screen)
+
+    categories_parser = subparsers.add_parser(
+        "categories", help="categories in the cached returns snapshot"
+    )
+    categories_parser.set_defaults(func=cmd_categories)
 
     stats_parser = subparsers.add_parser("stats", help="what the cache holds")
     stats_parser.set_defaults(func=cmd_stats)

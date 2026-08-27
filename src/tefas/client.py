@@ -27,7 +27,14 @@ from .exceptions import (
     TefasInvalidParameter,
     TefasRateLimitError,
 )
-from .fields import BREAKDOWN_FIELDS, INFO_FIELDS, KINDS, RETURN_FIELDS, rename
+from .fields import (
+    BREAKDOWN_FIELDS,
+    INFO_FIELDS,
+    KINDS,
+    PROFILE_FIELDS,
+    RETURN_FIELDS,
+    rename,
+)
 from .ratelimit import DEFAULT_RATE, DEFAULT_WINDOW, SlidingWindowLimiter, backoff_delay
 
 log = logging.getLogger("tefas")
@@ -38,6 +45,7 @@ INFO_ENDPOINT = "/api/funds/fonGnlBlgSiraliGetir"
 BREAKDOWN_ENDPOINT = "/api/funds/dagilimSiraliGetirT"
 RETURNS_ENDPOINT = "/api/funds/fonGetiriBazliBilgiGetir"
 PRICE_ENDPOINT = "/api/funds/fonFiyatBilgiGetir"
+PROFILE_ENDPOINT = "/api/funds/fonBilgiGetir"
 
 #: The API rejects ranges longer than one calendar month with
 #: "Tarih araligi 1 ayi asamaz". 28 days is the largest window that always
@@ -379,6 +387,20 @@ class Tefas:
         body = {"fonKodu": code.upper(), "dil": "TR", "periyod": period}
         rows = self._post(PRICE_ENDPOINT, body)
         return rows if raw else [rename(row, INFO_FIELDS) for row in rows]
+
+    def profile(self, code: str, raw: bool = False) -> Optional[dict]:
+        """Summary card for one fund, including where it ranks in its category.
+
+        ``category_rank`` out of ``category_fund_count``, plus ``market_share``,
+        are not available from any other endpoint. Returns ``None`` if TEFAS
+        does not know the code.
+        """
+        if not code:
+            raise TefasInvalidParameter("profile() requires a fund code")
+        rows = self._post(PROFILE_ENDPOINT, {"fonKodu": code.upper(), "dil": "TR"})
+        if not rows:
+            return None
+        return rows[0] if raw else rename(rows[0], PROFILE_FIELDS)
 
     def snapshot(
         self,
