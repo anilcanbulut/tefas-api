@@ -41,3 +41,12 @@ class EmptyCategoryData(TefasError):
     cache that has never seen it would quietly match nothing -- which reads as
     "no funds qualify" rather than "you have not synced categories yet".
     """
+
+
+class EmptyFeeData(TefasError):
+    """A fee filter was used before any fee snapshot was stored.
+
+    Same trap as :class:`EmptyCategoryData`: with no fees cached, "cheaper than
+    1%" matches nothing, and an empty result reads as an answer rather than as
+    a missing input.
+    """

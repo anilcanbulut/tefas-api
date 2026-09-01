@@ -36,7 +36,7 @@ Requires Python 3.9+. The only hard dependency is `requests`.
 
 ## The measured facts this is built on
 
-Verified against the live service on 27 Aug 2026:
+Verified against the live service on 27 Aug 2026, and the cost endpoint on 1 Sep 2026:
 
 | | |
 |---|---|
@@ -47,6 +47,7 @@ Verified against the live service on 27 Aug 2026:
 | Errors | Arrive as **HTTP 200** with `errorMessage` set, not as an error status |
 | Gateway | Apinizer — a managed API gateway, so 429 is a configured throttle, not a WAF ban |
 | Recovery | Immediate once the window rolls; no cooldown penalty or escalation observed |
+| Cost data | 2,096 securities funds and 400 pension funds, fees included, **one request each** |
 
 The client defaults to 4 requests/minute, one below the ceiling, because the window is shared with
 anything else calling TEFAS from the same address.
@@ -81,12 +82,59 @@ api.fund_codes()
 api.profile("AFA")
 # {'code': 'AFA', 'category': 'Hisse Senedi Fonu', 'category_rank': 34,
 #  'category_fund_count': 199, 'market_share': 2.05, ...}
+
+# What every fund charges, in one request
+api.fees()
+# {'code': 'AK3', 'management_fee': 3.4, 'management_fee_stated': 3.4,
+#  'total_expense_ratio': 2.56, 'founder_code': 'AKP', ...}
 ```
 
 All methods take `kind=` — `"YAT"` (default), `"EMK"`, `"BYF"`, `"GYF"`, `"GSYF"`, a list of them,
 or `None` for all five.
 
 Pass `raw=True` to get TEFAS's original Turkish keys instead of the English column names.
+
+### Costs
+
+Fees are the one thing a price series cannot tell you. Published NAVs are already **net** of the
+management fee, so a fund's past return silently blends how good the manager is with how much the
+manager charges — two funds an eyelash apart on return are not equally good bets if one of them
+charges three times as much to get there.
+
+```python
+fees = api.fees()                      # 2,096 securities funds, one request
+fees = api.fees(kind="EMK")            # 400 pension funds
+```
+
+Three columns, all annual percentages, parsed from TEFAS's Turkish decimals (`"2,04"` → `2.04`):
+
+| Column | TEFAS calls it | Meaning |
+|---|---|---|
+| `management_fee` | uygulanan yönetim ücreti oranı | What the fund actually charges |
+| `management_fee_stated` | içtüzükte yer alan oran | The rate written into the fund rules |
+| `total_expense_ratio` | azami toplam gider oranı | All costs, not just the management fee |
+
+`None` means the fund publishes no figure, which is **not** the same as zero — exchange traded
+funds send `"-"` for both fee columns while still declaring a total expense ratio. `management_fee`
+is usually at or below `management_fee_stated`, but not dependably: some funds state 0 and apply
+0.2, so neither column is treated here as a hard cap on the other. Pension funds (`EMK`) label the
+same columns "fon işletim gideri" instead; real estate and venture capital funds publish nothing
+and return no rows.
+
+Once cached, `performance()` reports the fee beside each fund and adds it back to give an
+approximate **gross** return — what the manager earned before taking a cut, which is the number
+that compares managers rather than price lists:
+
+```python
+store.performance("2026-08-02", "2026-09-01", category="Hisse Senedi", min_return=5)
+# code  return_pct  management_fee  gross_return_pct
+# KOT        11.94            1.05             12.03
+# YHB        10.82            3.00             11.06
+```
+
+`fee_drag_pct` is the fee pro-rated across each fund's own window; `gross_return_pct` is
+`return_pct` plus that. Both are `None` for a fund with no published fee. It is a first-order
+figure — the fee is not compounded on itself, which is well below the noise of daily NAV rounding.
 
 ### With pandas
 
@@ -128,18 +176,19 @@ store.performance(
 ```
 
 Returns are computed from stored prices between each fund's own first and last quote in the window.
-For anything more specific, query the SQLite file directly — `prices`, `breakdown` and `returns`
-are ordinary tables.
+For anything more specific, query the SQLite file directly — `prices`, `breakdown`, `returns` and
+`fees` are ordinary tables.
 
 ## CLI
 
 ```bash
-tefas sync --returns              # bring the cache up to date
+tefas sync --returns --fees       # bring the cache up to date
 tefas backfill --years 5          # one-off history load, resumable
 tefas funds                       # list funds
 tefas show AFA --days 30          # recent prices for one fund
 tefas profile AFA                 # summary card: rank in category, market share
 tefas top --by return_1y -n 20    # league table from the returns endpoint
+tefas fees --category "Hisse Senedi"   # what each fund charges a year
 tefas screen --category "Hisse Senedi" --min 5 --days 30
 tefas groups --days 90            # how each category performed
 tefas categories                  # categories in the cached snapshot
@@ -162,6 +211,9 @@ tefas screen --category "Hisse Senedi" --min 5 --days 30
 
 # anything that lost ground over a specific window
 tefas screen --since 2026-01-01 --to 2026-06-30 --max 0
+
+# the same, but only funds charging at most 1.5% a year
+tefas screen --category "Hisse Senedi" --min 5 --days 30 --max-fee 1.5
 ```
 
 Each fund is measured between its own first and last quote inside the window, so one that started
@@ -174,15 +226,18 @@ Funds with a single quote are excluded rather than reported as 0%.
 the average — because two categories can share a mean and be nothing alike:
 
 ```
-category                         funds  avg_return  median_return   worst    best  spread  positive_share
-Kıymetli Madenler Şemsiye Fonu      27        6.31           6.35    5.13    6.86    1.72          100
-Hisse Senedi Şemsiye Fonu          186        2.81           3.00   -6.12   10.69   16.81         92.5
-Serbest Şemsiye Fonu               383        1.64           1.08  -16.20   42.00   58.20         91.1
-Para Piyasası Şemsiye Fonu          50        1.11           1.08    1.02    1.36    0.34          100
+category                         funds  avg_return  median_return    worst    best  spread  positive_share  avg_fee
+Para Piyasası Şemsiye Fonu          50       10.20          10.17     2.89   12.61    9.72           100      0.96
+Borçlanma Araçları Şemsiye Fonu     62        9.16           9.75    -7.45   15.28   22.73          98.4      1.89
+Serbest Şemsiye Fonu               383        4.66           6.28   -44.66   61.55  106.22          82.0      1.79
+Değişken Şemsiye Fonu              156        3.67           4.51   -14.52   25.33   39.84          68.6      2.31
+Hisse Senedi Şemsiye Fonu          186        1.33           0.58   -18.37   39.68   58.05          53.8      2.59
 ```
 
-Money market funds land within a third of a point of each other; serbest funds span 58 points. The
-median is there because one extreme fund can drag a category's mean far from its typical member.
+Money market funds land within a few points of each other; serbest funds span 106. The median is
+there because one extreme fund can drag a category's mean far from its typical member, and
+`avg_fee` because the worst-performing category over these 90 days was also the most expensive
+one — which an average return alone will never tell you.
 
 Available as `Store.category_performance(...)`, built on `performance()` so the group and per-fund
 views cannot disagree.
@@ -227,13 +282,14 @@ running and starts being wrong.
 
 `tefas canary` checks shape, not just reachability: every mapped field still present, no
 unrecognised field appeared, row counts still sane (a collapse from 2,000 funds to 5 is a
-successful response and a broken one). Four requests.
+successful response and a broken one). Five requests.
 
 ```
 OK    prices     8150 rows
 OK    breakdown  8117 rows
 OK    returns    1059 rows
 OK    profile    1 rows
+OK    fees       2096 rows
 ```
 
 Exit codes are meant for cron and CI: `0` all clear, `1` new fields appeared (worth mapping, not
@@ -248,17 +304,25 @@ At the default 4 requests/minute:
 | Job | Requests | Time |
 |---|---|---|
 | Daily sync (prices + allocations) | 2 | ~1 s |
+| Returns snapshot (`--returns`) | 1 per fund type | ~1 s |
+| Fee snapshot (`--fees`) | 1 per fund type | ~1 s |
+| Canary | 5 | ~2 min |
 | One year of history | ~26 | ~7 min |
 | Five years of history | ~130 | ~33 min |
 
-Run `tefas backfill --years 5` once; after that, `sync` is all you need.
+Run `tefas backfill --years 5` once; after that, `sync` is all you need. Fees change rarely enough
+to belong on a weekly schedule, but at one request they cost nothing worth optimising away.
 
 ## Gotchas this package handles for you
 
 - **Errors come back as HTTP 200.** A naive `raise_for_status()` sails past them and yields silently
   empty results. The client raises `TefasAPIError` from the response body.
 - **Turkish characters.** Responses are UTF-8, but any consumer that falls back to a system codepage
-  mangles fund titles. The client decodes explicitly as UTF-8 rather than trusting inference.
+  mangles fund titles. The client decodes explicitly as UTF-8 rather than trusting inference, and
+  the CLI reconfigures its own output to UTF-8 so a Windows console does not undo that on the way
+  back out.
+- **Turkish decimals.** Fee columns arrive as strings like `"2,04"`, and `"-"` where a fund
+  publishes nothing. Both are parsed: comma to point, dash to `None` rather than to zero.
 - **The one-month cap.** Longer ranges are split automatically into 28-day windows.
 - **Required-but-null fields.** The request body needs about a dozen keys present even when empty;
   omitting them makes the backend answer with a `NullPointerException`.
@@ -296,6 +360,19 @@ adds in future is passed through the same way instead of being dropped.
 | `POST /api/funds/fonGetiriBazliBilgiGetir` | Trailing returns, risk score, category |
 | `POST /api/funds/fonFiyatBilgiGetir` | Single-fund history by fixed look-back period |
 | `POST /api/funds/fonBilgiGetir` | Summary card: rank in category, market share |
+| `POST /api/funds/fonYonetimBazliBilgiGetir` | Management fee, stated fee, total expense ratio |
+
+The site calls thirteen more that this package does not wrap, listed here so the next person does
+not have to re-derive them: `fonBuyuklukBazliBilgiGetir` (fund size change and net return over a
+window), `fonTurDnmGetiriGetir` (returns by fund type), `fonUnvanAra` and `fonUnvanGetir` (title
+search), `fonKurucuGetir`, `fonTurGetir`, `fonGrupGetir`, `fonTipiGetir`, `fonDetayGetir` (lookup
+lists), `fonTefasDuyuruGetir` (announcements), `fonGnlBlgSiraliGetirDosya` and
+`dagilimSiraliGetirDosya` (file exports), and `fonAlSatEkranValorHesapla` (settlement valor, which
+would not answer outside trading hours).
+
+They come from the site's own bundle at `/_next/static/chunks/common-*.js`, which is served without
+the bot-defence challenge that guards the HTML pages. That file is the authoritative list of what
+TEFAS actually exposes — worth re-reading before concluding a field is unavailable.
 
 ## What you can and cannot get
 
@@ -306,15 +383,21 @@ Available, and covered here:
 - **Portfolio allocation** — ~58 instrument classes per fund per day.
 - **Trailing returns** (1m/3m/6m/YTD/1y/3y/5y), the official **risk score** (1–7), and category.
 - **Category standing** — rank within category, number of funds in that category, market share.
-- **Screening** by category, fund type, and return over any window.
+- **Costs** — applied management fee, the fee stated in the fund rules, and the total expense
+  ratio, for every fund in a single request.
+- **Founder code** — the portfolio company that runs the fund, as a field rather than as the
+  leading word of the title.
+- **Screening** by category, fund type, cost, and return over any window.
 
 Not published by these endpoints, so not available here:
 
-- Management fee / total expense ratio, ISIN, minimum investment, settlement (valör) days.
+- ISIN, minimum investment, inception date, and settlement (valör) days. TEFAS does have a valor
+  endpoint (`fonAlSatEkranValorHesapla`, taking `islemTip`/`fonKodu`/`paraBirimi`) but it answered
+  "güncel kısıt bilgisine ulaşılamadı" for every fund tried outside trading hours, so it is
+  documented here rather than wrapped.
 - Prospectus and strategy text, and individual portfolio holdings — allocation is given by
   instrument *class*, not by security. This detail lives on KAP, not TEFAS.
-- Founder / portfolio company as a field, though it is the leading word of every fund title
-  (`AK PORTFÖY …`, `ATA PORTFÖY …`) and can be derived from there.
+- A benchmark index per fund, so tracking cannot be separated from alpha here.
 
 The HTML pages on tefas.gov.tr sit behind an F5 bot-defence challenge; the `/api/funds/` endpoints
 do not. That is why this package calls the API rather than scraping pages, and why it needs no

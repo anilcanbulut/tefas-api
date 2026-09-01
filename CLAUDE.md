@@ -35,18 +35,25 @@ store = Store(r"C:\Users\anilc\tefas\tefas.db")
 
 store.prices(code="AFA", start="2026-01-01")
 store.performance("2026-07-27", "2026-08-27", category="Hisse Senedi", min_return=5)
+store.performance("2026-07-27", "2026-08-27", max_fee=1.5)  # only cheap funds
 store.category_performance("2026-06-01", "2026-08-27")   # which categories did well
 store.query("SELECT ... FROM prices")                     # ordinary SQL, any query
 ```
 
 Tables are `prices`, `breakdown` (allocation, ~58 columns), `returns` (trailing returns, risk
-score, category), `fetch_log`. Keyed on `(code, date)`.
+score, category), `fees` (what each fund charges), `fetch_log`. Prices and allocations are keyed on
+`(code, date)`; returns and fees are snapshots keyed on `(code, fetched_on)`.
+
+**Prices are net of fees.** A fund's `return_pct` already has its own costs deducted, so never
+subtract the fee from it. `performance()` goes the other way and reports `gross_return_pct` --
+return with the fee added back -- which is what compares managers rather than price lists.
 
 ## Fetching from TEFAS (only if the cache lacks it)
 
 ```bash
-tefas --db <abs-path> sync --returns      # ~3 requests, run daily
-tefas --db <abs-path> backfill --years 5  # ~130 requests, ~33 min, resumable
+tefas --db <abs-path> sync --returns --fees   # ~4 requests, run daily
+tefas --db <abs-path> backfill --years 5      # ~130 requests, ~33 min, resumable
+tefas --db <abs-path> fees --category Hisse   # 1 request, what funds charge
 ```
 
 `backfill` records completed windows, so interrupting and re-running resumes. Only the window
@@ -78,7 +85,7 @@ and shared.
 
 | File | Holds |
 |---|---|
-| `client.py` | All five endpoints and their request shapes. **The only file that knows the API.** |
+| `client.py` | All six endpoints and their request shapes. **The only file that knows the API.** |
 | `store.py` | SQLite cache, screening, category rollup |
 | `ingest.py` | Resumable backfill and daily sync |
 | `ratelimit.py` | Sliding-window throttle, 429 backoff |
@@ -107,12 +114,14 @@ When TEFAS changes, `client.py` and `fields.py` are where the fix goes.
 - **A dozen request keys must be present even when null**, or the backend returns a
   `NullPointerException`.
 - **`dt` is government bond, `db` is fx payable bills.** Easy to transpose; they are not the same.
+- **Fee columns are Turkish decimal strings**, and `"-"` means the fund publishes nothing. Reading
+  that as zero would call the most expensive funds free. `parse_decimal` handles both.
 
 ## Tests
 
 ```bash
-python -m pytest -q          # 94 tests, no network, ~1s
-tefas canary                 # 4 live requests, checks the API hasn't changed shape
+python -m pytest -q          # 131 tests, no network, ~2s
+tefas canary                 # 5 live requests, checks the API hasn't changed shape
 ```
 
 Tests must stay offline. `tests/test_client.py` swaps in a `NoThrottle` limiter — without it the
@@ -123,6 +132,15 @@ daily in GitHub Actions.
 
 ## Not available from TEFAS
 
-Management fee, ISIN, minimum investment, settlement days, prospectus text, and individual
+ISIN, minimum investment, inception date, benchmark index, prospectus text, and individual
 holdings — allocation is by instrument *class*, not by security. That data lives on KAP. Don't go
 looking for an endpoint; there isn't one.
+
+Fees **are** available, via `fonYonetimBazliBilgiGetir` — this file said otherwise until the
+endpoint was found by reading the site's own JavaScript bundle. If something else here reads as a
+flat "TEFAS doesn't publish X", the bundle at `/_next/static/chunks/common-*.js` lists every
+endpoint the site calls, and is worth checking before believing it.
+
+`fonAlSatEkranValorHesapla` (body `{islemTip, fonKodu, paraBirimi}`) looks like settlement days but
+answered "güncel kısıt bilgisine ulaşılamadı" for every fund tried outside trading hours. Left
+unwrapped on purpose: verify it during market hours before relying on it.

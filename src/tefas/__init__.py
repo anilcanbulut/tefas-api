@@ -12,6 +12,7 @@ rate limit by default.
 
 from .client import (
     BREAKDOWN_ENDPOINT,
+    FEES_ENDPOINT,
     INFO_ENDPOINT,
     MAX_WINDOW_DAYS,
     PRICE_ENDPOINT,
@@ -24,6 +25,7 @@ from .client import (
 )
 from .exceptions import (
     EmptyCategoryData,
+    EmptyFeeData,
     TefasAPIError,
     TefasError,
     TefasHTTPError,
@@ -32,15 +34,17 @@ from .exceptions import (
 )
 from .fields import (
     BREAKDOWN_FIELDS,
+    FEE_FIELDS,
     INFO_FIELDS,
     KIND_LABELS,
     KINDS,
     PROFILE_FIELDS,
     RETURN_FIELDS,
     UNMAPPED_BREAKDOWN_KEYS,
+    parse_decimal,
 )
 from . import canary
-from .ingest import backfill, estimate_requests, refresh_returns, sync
+from .ingest import backfill, estimate_requests, refresh_fees, refresh_returns, sync
 from .ratelimit import OBSERVED_LIMIT, SlidingWindowLimiter
 from .store import Store
 
@@ -56,6 +60,7 @@ __all__ = [
     "backfill",
     "sync",
     "refresh_returns",
+    "refresh_fees",
     "estimate_requests",
     "SlidingWindowLimiter",
     "OBSERVED_LIMIT",
@@ -66,17 +71,21 @@ __all__ = [
     "BREAKDOWN_FIELDS",
     "RETURN_FIELDS",
     "PROFILE_FIELDS",
+    "FEE_FIELDS",
     "UNMAPPED_BREAKDOWN_KEYS",
+    "parse_decimal",
     "INFO_ENDPOINT",
     "BREAKDOWN_ENDPOINT",
     "RETURNS_ENDPOINT",
     "PRICE_ENDPOINT",
     "PROFILE_ENDPOINT",
+    "FEES_ENDPOINT",
     "TefasError",
     "TefasAPIError",
     "TefasHTTPError",
     "TefasRateLimitError",
     "TefasInvalidParameter",
     "EmptyCategoryData",
+    "EmptyFeeData",
     "__version__",
 ]

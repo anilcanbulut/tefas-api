@@ -13,8 +13,8 @@ So this checks shape, not just reachability:
 * row counts are in a sane range, so a collapse from 2,000 funds to 5 is caught
   even though both are "successful" responses.
 
-Run it on a schedule and let it page you. Four requests, one minute, once a day
-is plenty.
+Run it on a schedule and let it page you. Five requests, two minutes, once a
+day is plenty.
 """
 
 import datetime as _dt
@@ -23,6 +23,7 @@ from typing import List, Optional
 from .exceptions import TefasError
 from .fields import (
     BREAKDOWN_FIELDS,
+    FEE_FIELDS,
     INFO_FIELDS,
     PROFILE_FIELDS,
     RETURN_FIELDS,
@@ -36,12 +37,19 @@ CRITICAL = {
     "breakdown": ("fonKodu", "tarih"),
     "returns": ("fonKodu", "getiri1a", "fonTurAciklama"),
     "profile": ("fonKodu", "kategoriDerece", "pazarPayi"),
+    "fees": ("fonKodu", "uygulananYu1Y", "fonTopGiderKesoran"),
 }
 
 #: Row counts below these suggest the endpoint is answering but not with the
-#: whole market. Set well under observed values (2,037 / 2,029 / 1,059) so
-#: normal drift does not cry wolf.
-MIN_ROWS = {"prices": 500, "breakdown": 500, "returns": 300, "profile": 1}
+#: whole market. Set well under observed values (2,037 / 2,029 / 1,059 /
+#: 2,096) so normal drift does not cry wolf.
+MIN_ROWS = {
+    "prices": 500,
+    "breakdown": 500,
+    "returns": 300,
+    "profile": 1,
+    "fees": 500,
+}
 
 #: Pagination noise, not data.
 IGNORED_KEYS = frozenset({"rn"})
@@ -104,7 +112,7 @@ def _inspect(name, rows, field_map, allowed_extra=frozenset()):
 
 
 def run(client, code: str = "AFA", kind: str = "YAT") -> List[CheckResult]:
-    """Exercise every endpoint this package depends on. Costs four requests."""
+    """Exercise every endpoint this package depends on. Costs five requests."""
     today = _dt.date.today()
     # A five-day window always contains a trading day, whatever the weekend or
     # public holiday, and still costs a single request.
@@ -139,6 +147,7 @@ def run(client, code: str = "AFA", kind: str = "YAT") -> List[CheckResult]:
         return [row] if row else []
 
     guarded("profile", profile_rows, PROFILE_FIELDS)
+    guarded("fees", lambda: client.fees(kind=kind, raw=True), FEE_FIELDS)
     return results
 
 

@@ -149,3 +149,67 @@ KIND_LABELS = {
 def rename(row, field_map):
     """Rename one API row, passing unknown keys through untouched."""
     return {field_map.get(key, key): value for key, value in row.items()}
+
+
+# --- /api/funds/fonYonetimBazliBilgiGetir -------------------------------------
+#
+# Costs, for every fund, in one request. This is the only endpoint that carries
+# them, and they are the one number daily prices cannot tell you: NAVs are
+# already net of the management fee, so a fund's published return silently
+# blends manager skill with how much the manager charged. The fee separates
+# the two.
+#
+# TEFAS labels the same three columns differently per fund type, and says so in
+# the `altbaslik` keys rather than in the field names -- securities funds get
+# "yonetim ucreti" (management fee) and a *maximum* total expense ratio, while
+# pension funds get "fon isletim gideri" (fund operating expense) and an
+# *actual* one. The labels are mapped rather than dropped because they are the
+# only thing that distinguishes a cap from a charge.
+
+FEE_FIELDS = {
+    "fonKodu": "code",
+    "fonUnvan": "title",
+    "fonTurAciklama": "category",
+    "fonTurKod": "category_code",
+    "kurucuKod": "founder_code",
+    "tefasDurum": "on_tefas",
+    "uygulananYu1Y": "management_fee",
+    # "The management fee rate given in the fund rules" -- usually the ceiling
+    # the applied fee sits under, but not dependably: some funds state 0 while
+    # applying 0.2, so this is reported as what TEFAS calls it rather than
+    # relabelled as a cap it does not always bound.
+    "fonIcTuzukYu1G": "management_fee_stated",
+    "fonTopGiderKesoran": "total_expense_ratio",
+    "altbaslik1": "fee_basis",
+    "altbaslik2": "fee_ceiling_basis",
+    "altbaslik3": "expense_basis",
+    "yillikGetiri": "annual_return",
+}
+
+#: Fee columns arrive as Turkish-formatted strings ("2,04"), not numbers.
+FEE_NUMERIC = ("management_fee", "management_fee_stated", "total_expense_ratio")
+
+#: What TEFAS sends when a fund does not publish a figure. Exchange traded
+#: funds use "-" for both fee columns; treating that as text would poison every
+#: comparison, and treating it as zero would call the most expensive funds free.
+FEE_MISSING = frozenset({"-", "", "N/A"})
+
+
+def parse_decimal(value):
+    """Turkish-formatted number to float. Returns ``None`` when absent.
+
+    "2,04" is two point oh four, and "1.234,5" is one thousand two hundred
+    thirty four point five: the separators are the other way round from the
+    English convention.
+    """
+    if value is None or isinstance(value, (int, float)):
+        return value
+    text = str(value).strip()
+    if text in FEE_MISSING:
+        return None
+    if "," in text:
+        text = text.replace(".", "").replace(",", ".")
+    try:
+        return float(text)
+    except ValueError:
+        return None

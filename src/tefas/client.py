@@ -29,10 +29,13 @@ from .exceptions import (
 )
 from .fields import (
     BREAKDOWN_FIELDS,
+    FEE_FIELDS,
+    FEE_NUMERIC,
     INFO_FIELDS,
     KINDS,
     PROFILE_FIELDS,
     RETURN_FIELDS,
+    parse_decimal,
     rename,
 )
 from .ratelimit import (
@@ -54,6 +57,7 @@ BREAKDOWN_ENDPOINT = "/api/funds/dagilimSiraliGetirT"
 RETURNS_ENDPOINT = "/api/funds/fonGetiriBazliBilgiGetir"
 PRICE_ENDPOINT = "/api/funds/fonFiyatBilgiGetir"
 PROFILE_ENDPOINT = "/api/funds/fonBilgiGetir"
+FEES_ENDPOINT = "/api/funds/fonYonetimBazliBilgiGetir"
 
 #: The API rejects ranges longer than one calendar month with
 #: "Tarih araligi 1 ayi asamaz". 28 days is the largest window that always
@@ -391,6 +395,54 @@ class Tefas:
                     row["fonTipi"] = one_kind
                 rows.append(row if raw else rename(row, RETURN_FIELDS))
             self._report(index, len(kinds), "returns {}".format(one_kind))
+        return rows
+
+    def fees(
+        self,
+        kind: Union[str, Sequence[str], None] = "YAT",
+        raw: bool = False,
+    ) -> List[dict]:
+        """What every fund of this kind charges, in one request per kind.
+
+        Daily prices are published *net* of the management fee, so a fund's
+        return already has its own costs deducted -- which is exactly why the
+        fee is worth having separately. Two funds an eyelash apart on past
+        return are not equally good bets if one of them charges twice as much
+        to get there.
+
+        Fees come back as annual percentages, parsed from TEFAS's Turkish
+        decimals. ``None`` means the fund publishes no figure, which is not the
+        same as zero: exchange traded funds report "-" for both fee columns
+        while still declaring a total expense ratio.
+
+        Like ``returns()`` this is a point-in-time snapshot with no date range.
+        Real estate and venture capital funds return nothing here.
+        """
+        rows = []
+        kinds = _normalise_kinds(kind)
+        for index, one_kind in enumerate(kinds, start=1):
+            body = {
+                "dil": "TR",
+                "fonTipi": one_kind,
+                "kurucuKodu": None,
+                "fonTurKod": None,
+                "fonGrubu": None,
+                "fonTurAciklama": None,
+                "islem": None,
+                "sfonTurKod": None,
+            }
+            for row in self._post(FEES_ENDPOINT, body):
+                if len(kinds) > 1:
+                    row["fonTipi"] = one_kind
+                if raw:
+                    rows.append(row)
+                    continue
+                mapped = rename(row, FEE_FIELDS)
+                for column in FEE_NUMERIC:
+                    if column in mapped:
+                        mapped[column] = parse_decimal(mapped[column])
+                rows.append(mapped)
+            self._report(index, len(kinds), "fees {}".format(one_kind))
         return rows
 
     def fund_codes(self, kind: Union[str, Sequence[str], None] = "YAT") -> List[str]:

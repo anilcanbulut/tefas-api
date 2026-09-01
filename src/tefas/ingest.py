@@ -123,5 +123,20 @@ def refresh_returns(client, store: Store, kinds: Sequence[str] = ("YAT",)) -> in
     return total
 
 
+def refresh_fees(client, store: Store, kinds: Sequence[str] = ("YAT",)) -> int:
+    """Store today's cost snapshot: one request per kind, ~2,500 funds.
+
+    Fees move rarely, so this belongs on a weekly schedule rather than a daily
+    one -- but it is cheap enough that running it with every sync costs nothing
+    anyone will notice. Real estate and venture capital funds publish no fees
+    and are skipped by the API itself, returning zero rows rather than an error.
+    """
+    total = 0
+    for kind in kinds:
+        rows = client.fees(kind=kind)
+        total += store.upsert_fees(rows, kind=kind)
+    return total
+
+
 def all_kinds() -> Sequence[str]:
     return KINDS

@@ -5,6 +5,7 @@
     tefas funds                     # list fund codes
     tefas show AFA --days 30        # recent prices for one fund
     tefas top --by return_1y -n 20  # league table from the returns endpoint
+    tefas fees --category Hisse      # what each fund in a category charges
     tefas stats                     # what the cache holds
     tefas export prices -o out.csv  # dump a table
 """
@@ -20,7 +21,14 @@ from . import canary as _canary
 from .client import Tefas, parse_date
 from .exceptions import TefasError
 from .fields import KIND_LABELS, KINDS
-from .ingest import DATASETS, backfill, estimate_requests, refresh_returns, sync
+from .ingest import (
+    DATASETS,
+    backfill,
+    estimate_requests,
+    refresh_fees,
+    refresh_returns,
+    sync,
+)
 from .ratelimit import (
     DEFAULT_BACKOFF_BASE,
     DEFAULT_BACKOFF_CAP,
@@ -29,6 +37,25 @@ from .ratelimit import (
     DEFAULT_WINDOW,
 )
 from .store import Store, aligned_windows
+
+
+def _use_utf8_output():
+    """Print Turkish fund names instead of mojibake.
+
+    Responses are decoded as UTF-8 correctly, but a Windows console defaults to
+    a legacy codepage and mangles every I, O, S and G with a diacritic on the
+    way out -- which looks like a decoding bug in this package and is not.
+    Encoding errors are replaced rather than raised: a stray character is worth
+    less than a crashed report.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError):  # a pipe or capture that cannot change
+            pass
 
 
 def _progress(done, total, label):
@@ -103,6 +130,9 @@ def cmd_sync(args):
         if args.returns:
             count = refresh_returns(api, store, kinds=_kinds(args))
             print("Returns snapshot: {} funds".format(count))
+        if args.fees:
+            count = refresh_fees(api, store, kinds=_kinds(args))
+            print("Fee snapshot: {} funds".format(count))
         print(
             "Synced: {requests} requests, {rows} rows, {skipped} windows already "
             "cached.".format(**result)
@@ -219,6 +249,7 @@ def cmd_screen(args):
             category=args.category,
             kind=None if args.kind == "ALL" else args.kind,
             limit=args.limit,
+            max_fee=args.max_fee,
         )
     if not rows:
         print(
@@ -227,10 +258,62 @@ def cmd_screen(args):
         )
         return 1
     print("{} funds, {} .. {}".format(len(rows), start, end))
+    columns = ["code", "return_pct", "management_fee", "gross_return_pct",
+               "risk_value", "category", "title"]
+    if all(row.get("management_fee") is None for row in rows):
+        # Nothing to show and nothing to hide: without a fee snapshot these
+        # two columns would be a wall of dashes suggesting the funds are free.
+        columns = ["code", "return_pct", "start_price", "end_price",
+                   "risk_value", "category", "title"]
+    _print_table(rows, columns)
+    return 0
+
+
+def cmd_fees(args):
+    """What funds charge -- the one number a price series cannot tell you."""
+    if args.cached:
+        with Store(args.db) as store:
+            rows = store.query(
+                "SELECT * FROM fees WHERE fetched_on = "
+                "(SELECT MAX(fetched_on) FROM fees)"
+            )
+        if not rows:
+            print("No fee snapshot cached. Run `tefas sync --fees` first.")
+            return 1
+    else:
+        with _client(args) as api:
+            rows = api.fees(kind=_kinds(args))
+
+    if args.category:
+        needle = args.category.lower()
+        rows = [r for r in rows if needle in (r.get("category") or "").lower()]
+
+    priced = [r for r in rows if r.get("management_fee") is not None]
+    if not priced:
+        print("No fund here publishes a fee.")
+        return 1
+
+    priced.sort(key=lambda r: r["management_fee"], reverse=args.expensive)
     _print_table(
-        rows, ["code", "return_pct", "start_price", "end_price", "risk_value",
-               "category", "title"]
+        priced,
+        ["code", "management_fee", "management_fee_stated", "total_expense_ratio",
+         "category", "title"],
+        limit=args.n,
     )
+
+    values = sorted(r["management_fee"] for r in priced)
+    middle = len(values) // 2
+    median = values[middle] if len(values) % 2 else (
+        values[middle - 1] + values[middle]
+    ) / 2.0
+    blank = len(rows) - len(priced)
+    print()
+    print(
+        "{} funds publish a fee: cheapest {:.2f}%, median {:.2f}%, dearest "
+        "{:.2f}% a year.".format(len(priced), values[0], median, values[-1])
+    )
+    if blank:
+        print("{} more publish none (blank, not free).".format(blank))
     return 0
 
 
@@ -259,7 +342,7 @@ def cmd_groups(args):
     _print_table(
         rows,
         ["category", "funds", "avg_return", "median_return", "worst", "best",
-         "spread", "positive_share"],
+         "spread", "positive_share", "avg_fee"],
     )
     return 0
 
@@ -361,6 +444,8 @@ def build_parser():
                              choices=list(DATASETS))
     sync_parser.add_argument("--returns", action="store_true",
                              help="also snapshot trailing returns")
+    sync_parser.add_argument("--fees", action="store_true",
+                             help="also snapshot management fees (1 request/kind)")
     sync_parser.set_defaults(func=cmd_sync)
 
     back_parser = subparsers.add_parser("backfill", help="load history, resumable")
@@ -402,8 +487,21 @@ def build_parser():
     screen_parser.add_argument("--min", type=float, help="minimum return %%")
     screen_parser.add_argument("--max", type=float, help="maximum return %%")
     screen_parser.add_argument("--category", help='substring, e.g. "Hisse Senedi"')
+    screen_parser.add_argument("--max-fee", type=float, dest="max_fee",
+                               help="keep funds charging at most this %% a year")
     screen_parser.add_argument("--limit", type=int, default=30)
     screen_parser.set_defaults(func=cmd_screen)
+
+    fees_parser = subparsers.add_parser(
+        "fees", help="what each fund charges a year"
+    )
+    fees_parser.add_argument("--category", help='substring, e.g. "Hisse Senedi"')
+    fees_parser.add_argument("-n", type=int, default=30)
+    fees_parser.add_argument("--expensive", action="store_true",
+                             help="dearest first (default is cheapest first)")
+    fees_parser.add_argument("--cached", action="store_true",
+                             help="read the stored snapshot instead of fetching")
+    fees_parser.set_defaults(func=cmd_fees)
 
     categories_parser = subparsers.add_parser(
         "categories", help="categories in the cached returns snapshot"
@@ -431,7 +529,9 @@ def build_parser():
     stats_parser.set_defaults(func=cmd_stats)
 
     export_parser = subparsers.add_parser("export", help="dump a table to CSV")
-    export_parser.add_argument("table", choices=["prices", "breakdown", "returns"])
+    export_parser.add_argument(
+        "table", choices=["prices", "breakdown", "returns", "fees"]
+    )
     export_parser.add_argument("-o", "--out", required=True)
     export_parser.set_defaults(func=cmd_export)
 
@@ -442,6 +542,7 @@ def build_parser():
 
 
 def main(argv=None):
+    _use_utf8_output()
     parser = build_parser()
     args = parser.parse_args(argv)
 

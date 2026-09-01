@@ -29,7 +29,8 @@ def price_rows(n=600, **overrides):
 
 
 class StubClient:
-    def __init__(self, prices=None, breakdown=None, returns=None, profile=None):
+    def __init__(self, prices=None, breakdown=None, returns=None, profile=None,
+                 fees=None):
         self._prices = price_rows() if prices is None else prices
         self._breakdown = breakdown if breakdown is not None else [
             {"fonKodu": "AFA", "tarih": "2026-08-26", "hs": 1.0} for _ in range(600)
@@ -41,6 +42,10 @@ class StubClient:
         self._profile = profile if profile is not None else {
             "fonKodu": "AFA", "kategoriDerece": 1, "pazarPayi": 1.0
         }
+        self._fees = fees if fees is not None else [
+            {"fonKodu": "AFA", "uygulananYu1Y": "2,04", "fonTopGiderKesoran": "2,19"}
+            for _ in range(600)
+        ]
 
     def prices(self, *a, **k):
         return self._prices
@@ -54,6 +59,9 @@ class StubClient:
     def profile(self, *a, **k):
         return self._profile
 
+    def fees(self, *a, **k):
+        return self._fees
+
 
 def by_name(results):
     return {result.name: result for result in results}
@@ -65,10 +73,21 @@ def test_an_unchanged_api_passes_every_check():
     assert canary.exit_code(results) == 0
 
 
-def test_all_four_endpoints_are_checked():
+def test_every_endpoint_the_package_uses_is_checked():
     assert set(by_name(canary.run(StubClient()))) == {
-        "prices", "breakdown", "returns", "profile"
+        "prices", "breakdown", "returns", "profile", "fees"
     }
+
+
+def test_a_fee_column_disappearing_is_breaking():
+    """Losing the fee would not break a single request -- it would quietly
+    turn every cost comparison into a blank column."""
+    stripped = [
+        {"fonKodu": "AFA", "fonTopGiderKesoran": "2,19"} for _ in range(600)
+    ]
+    results = canary.run(StubClient(fees=stripped))
+    assert "uygulananYu1Y" in by_name(results)["fees"].missing
+    assert canary.exit_code(results) == 2
 
 
 def test_a_renamed_field_is_caught_as_both_missing_and_new():
